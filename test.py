@@ -8,11 +8,11 @@ pipeline = StableDiffusionXLInpaintPipeline.from_pretrained(
 )
 pipeline.to('cuda')
 
-image = load_image('https://cdn-uploads.huggingface.co/production/uploads/630ed69a31970d1cd4fd575d/tPo5oPJQpxWamM-tGIYqj.png')
-mask_image = load_image('https://cdn-uploads.huggingface.co/production/uploads/630ed69a31970d1cd4fd575d/QpmzmgROUM0eP53Cxx2Ih.png', lambda x: x.convert('L'))
+image = load_image('images/sample.jpg')
+mask_image = load_image('masks/sample_mask.png', lambda x: x.convert('L'))
 
 inpainted_image = pipeline(
-  prompt='blue eyes, holding red spider lily in hand',
+  prompt='background with tree',
   image=image,
   mask_image=mask_image,
   num_inference_steps=28,
