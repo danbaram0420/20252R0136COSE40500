@@ -2,42 +2,63 @@ import gradio as gr
 import torch
 from diffusers import StableDiffusionXLInpaintPipeline
 from PIL import Image
+import os
+import numpy as np
 
 MODEL_ID = "ShinoharaHare/Waifu-Inpaint-XL"
+token = os.environ.get("HF_TOKEN")  # HF_TOKEN을 환경변수로 설정해둔 경우
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.float16 if device == "cuda" else torch.float32
 
 pipe = StableDiffusionXLInpaintPipeline.from_pretrained(
     MODEL_ID,
-    torch_dtype=dtype,
+    torch_dtype=torch.float16,
     use_safetensors=True,
-)
-pipe = pipe.to(device)
+    token=token,
+).to("cuda")
 
 # 선택: VRAM 절약/속도 옵션 (환경에 따라)
 # pipe.enable_xformers_memory_efficient_attention()  # xformers 설치 시
 # pipe.enable_model_cpu_offload()  # VRAM이 작으면 유용
 
-def inpaint(sketch, prompt, negative_prompt, steps, cfg, strength, seed):
+def _editor_to_image_and_mask(editor_value):
     """
-    sketch는 gr.Image(tool='sketch')로 들어오면 {"image": PIL/np, "mask": PIL/np} 형태
-    (Gradio가 tool=sketch일 때 dict로 넘겨주는 동작) :contentReference[oaicite:3]{index=3}
+    gr.ImageEditor 입력(editor_value)에서:
+    - background: 원본 이미지
+    - layers[-1]의 alpha: 마스크
+    를 추출해서 (image, mask[L])로 반환
     """
-    if sketch is None or not isinstance(sketch, dict) or "image" not in sketch or "mask" not in sketch:
-        raise gr.Error("이미지를 올리고 마스크를 그려주세요. (왼쪽 이미지에서 브러시로 칠하면 됩니다)")
+    if editor_value is None or not isinstance(editor_value, dict):
+        raise gr.Error("이미지를 올리고 마스크를 그려주세요.")
 
-    image = sketch["image"]
-    mask = sketch["mask"]
+    bg = editor_value.get("background", None)
+    layers = editor_value.get("layers", None)
 
-    # Gradio가 numpy로 줄 때도 있으니 PIL로 통일
-    if not isinstance(image, Image.Image):
-        image = Image.fromarray(image)
-    if not isinstance(mask, Image.Image):
-        mask = Image.fromarray(mask)
+    if bg is None:
+        raise gr.Error("배경 이미지를 올려주세요.")
+    if not isinstance(bg, Image.Image):
+        bg = Image.fromarray(bg)
 
-    # mask는 보통 흑백(또는 RGBA)로 들어올 수 있음 → L로 변환
-    mask = mask.convert("L")
+    if not layers or len(layers) == 0:
+        raise gr.Error("마스크를 브러시로 칠해 주세요.")
+
+    # 보통 마지막 레이어가 사용자가 칠한 stroke
+    layer = layers[-1]
+    if not isinstance(layer, Image.Image):
+        layer = Image.fromarray(layer)
+
+    layer = layer.convert("RGBA")
+    alpha = layer.split()[-1]  # A 채널
+
+    # alpha > 0인 픽셀을 흰색(255), 아니면 검정(0)으로
+    mask = alpha.point(lambda p: 255 if p > 0 else 0).convert("L")
+
+    return bg.convert("RGB"), mask
+
+
+def inpaint(editor_value, prompt, negative_prompt, steps, cfg, strength, seed):
+    image, mask = _editor_to_image_and_mask(editor_value)
 
     generator = None
     if seed is not None and int(seed) >= 0:
@@ -60,7 +81,7 @@ with gr.Blocks() as demo:
     gr.Markdown("# Waifu-Inpaint-XL Inpainting GUI (로컬)")
 
     with gr.Row():
-        inp = gr.Image(label="원본 + 마스크(브러시로 칠하기)", tool="sketch", type="pil")
+        inp = gr.ImageEditor(label="원본 + 마스크(브러시로 칠하기)", type="pil")
         out = gr.Image(label="결과", type="pil")
 
     prompt = gr.Textbox(label="Prompt", value="remove text, clean background, anime style", lines=2)
